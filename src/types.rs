@@ -445,7 +445,6 @@ impl ZipFileData {
             _ => None,
         }
     }
-
     /// PKZIP version needed to open this file (from APPNOTE 4.4.3.2).
     pub fn version_needed(&self) -> u16 {
         let compression_version: u16 = match self.compression_method {

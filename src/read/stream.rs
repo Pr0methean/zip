@@ -1,6 +1,6 @@
 use crate::unstable::LittleEndianReadExt;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use super::{
@@ -19,7 +19,7 @@ impl<R> ZipStreamReader<R> {
     }
 }
 
-impl<R: Read> ZipStreamReader<R> {
+impl<R: Read + Seek> ZipStreamReader<R> {
     fn parse_central_directory(&mut self) -> ZipResult<Option<ZipStreamFileMetadata>> {
         // Give archive_offset and central_header_start dummy value 0, since
         // they are not used in the output.

@@ -1573,6 +1573,18 @@ impl<W: Write + Seek> GenericZipWriter<W> {
                         Ok(Box::new(|bare| Storer(bare)))
                     }
                 }
+                #[cfg(feature = "legacy-zip")]
+                CompressionMethod::Shrink => Err(ZipError::UnsupportedArchive(
+                    "Shrink compression unsupported",
+                )),
+                #[cfg(feature = "legacy-zip")]
+                CompressionMethod::Reduce(_) => Err(ZipError::UnsupportedArchive(
+                    "Reduce compression unsupported",
+                )),
+                #[cfg(feature = "legacy-zip")]
+                CompressionMethod::Implode => Err(ZipError::UnsupportedArchive(
+                    "Implode compression unsupported",
+                )),
                 #[cfg(feature = "_deflate-any")]
                 CompressionMethod::Deflated => {
                     let default = if cfg!(all(

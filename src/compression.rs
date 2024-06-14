@@ -38,6 +38,16 @@ pub enum CompressionMethod {
     /// Compress the file using LZMA
     #[cfg(feature = "lzma")]
     Lzma,
+
+    /// Legacy format
+    #[cfg(feature = "legacy-zip")]
+    Shrink,
+    /// Reduce (Method 2-5)
+    #[cfg(feature = "legacy-zip")]
+    Reduce(u8),
+    /// Method 6 Implode/explode
+    #[cfg(feature = "legacy-zip")]
+    Implode,
     /// Unsupported compression method
     #[cfg_attr(
         not(fuzzing),
@@ -49,12 +59,18 @@ pub enum CompressionMethod {
 /// All compression methods defined for the ZIP format
 impl CompressionMethod {
     pub const STORE: Self = CompressionMethod::Stored;
-    pub const SHRINK: Self = CompressionMethod::Unsupported(1);
-    pub const REDUCE_1: Self = CompressionMethod::Unsupported(2);
-    pub const REDUCE_2: Self = CompressionMethod::Unsupported(3);
-    pub const REDUCE_3: Self = CompressionMethod::Unsupported(4);
-    pub const REDUCE_4: Self = CompressionMethod::Unsupported(5);
-    pub const IMPLODE: Self = CompressionMethod::Unsupported(6);
+    #[cfg(feature = "legacy-zip")]
+    pub const SHRINK: Self = CompressionMethod::Shrink;
+    #[cfg(feature = "legacy-zip")]
+    pub const REDUCE_1: Self = CompressionMethod::Reduce(1);
+    #[cfg(feature = "legacy-zip")]
+    pub const REDUCE_2: Self = CompressionMethod::Reduce(2);
+    #[cfg(feature = "legacy-zip")]
+    pub const REDUCE_3: Self = CompressionMethod::Reduce(3);
+    #[cfg(feature = "legacy-zip")]
+    pub const REDUCE_4: Self = CompressionMethod::Reduce(4);
+    #[cfg(feature = "legacy-zip")]
+    pub const IMPLODE: Self = CompressionMethod::Implode;
     #[cfg(feature = "_deflate-any")]
     pub const DEFLATE: Self = CompressionMethod::Deflated;
     #[cfg(not(feature = "_deflate-any"))]
@@ -93,6 +109,18 @@ impl CompressionMethod {
     pub(crate) const fn parse_from_u16(val: u16) -> Self {
         match val {
             0 => CompressionMethod::Stored,
+            #[cfg(feature = "legacy-zip")]
+            1 => CompressionMethod::Shrink,
+            #[cfg(feature = "legacy-zip")]
+            2 => CompressionMethod::Reduce(1),
+            #[cfg(feature = "legacy-zip")]
+            3 => CompressionMethod::Reduce(2),
+            #[cfg(feature = "legacy-zip")]
+            4 => CompressionMethod::Reduce(3),
+            #[cfg(feature = "legacy-zip")]
+            5 => CompressionMethod::Reduce(4),
+            #[cfg(feature = "legacy-zip")]
+            6 => CompressionMethod::Implode,
             #[cfg(feature = "_deflate-any")]
             8 => CompressionMethod::Deflated,
             #[cfg(feature = "deflate64")]
@@ -122,6 +150,13 @@ impl CompressionMethod {
     pub(crate) const fn serialize_to_u16(self) -> u16 {
         match self {
             CompressionMethod::Stored => 0,
+            #[cfg(feature = "legacy-zip")]
+            CompressionMethod::Shrink => 1,
+            #[cfg(feature = "legacy-zip")]
+            CompressionMethod::Reduce(n) => 1 + n as u16,
+            #[cfg(feature = "legacy-zip")]
+            CompressionMethod::Implode => 6,
+
             #[cfg(feature = "_deflate-any")]
             CompressionMethod::Deflated => 8,
             #[cfg(feature = "deflate64")]

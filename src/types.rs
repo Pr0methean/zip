@@ -445,6 +445,8 @@ pub struct ZipFileData {
     pub compressed_size: u64,
     /// Size of the file when extracted
     pub uncompressed_size: u64,
+    /// ZIP flags
+    pub flags: u16,
     /// Name of the file
     pub file_name: Box<str>,
     /// Raw file name. To be used when file_name was incorrectly decoded.
@@ -1102,6 +1104,7 @@ mod test {
             crc32: 0,
             compressed_size: 0,
             uncompressed_size: 0,
+            flags: 0,
             file_name: file_name.clone().into_boxed_str(),
             file_name_raw: file_name.into_bytes().into_boxed_slice(),
             extra_field: None,

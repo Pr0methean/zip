@@ -4,7 +4,8 @@ use crate::result::{ZipError, ZipResult};
 use memchr::memmem::FinderRev;
 use std::io;
 use std::io::prelude::*;
-use std::mem;
+use std::mem::size_of_val;
+use std::path::{Component, Path, MAIN_SEPARATOR};
 
 /// "Magic" header values used in the zip spec to locate metadata records.
 ///
@@ -296,14 +297,28 @@ impl Zip32CentralDirectoryEnd {
         })
     }
 
-    pub fn find_and_parse<T: Read + Seek>(
-        reader: &mut T,
-    ) -> ZipResult<(Zip32CentralDirectoryEnd, u64)> {
+    pub fn find_and_parse<T: Read + Seek>(reader: &mut T) -> ZipResult<(CentralDirectoryEnd, u64)> {
+        const HEADER_SIZE: usize = 22;
         let file_length = reader.seek(io::SeekFrom::End(0))?;
-
         if file_length < mem::size_of::<Zip32CDEBlock>() as u64 {
             return Err(ZipError::InvalidArchive("Invalid zip header"));
         }
+        let last_chunk_start = reader.seek(io::SeekFrom::End(
+            -(std::cmp::min(file_length as usize, HEADER_SIZE + u16::MAX as usize) as i64),
+        ))?;
+        let mut last_chunk = Vec::with_capacity(HEADER_SIZE + u16::MAX as usize);
+        reader.read_to_end(&mut last_chunk)?;
+
+        if last_chunk.len() < HEADER_SIZE {
+            return Err(ZipError::InvalidArchive("Invalid zip header"));
+        }
+
+        let mut pos = last_chunk.len() - HEADER_SIZE;
+        loop {
+            if (&last_chunk[pos..]).read_u32_le()? == CENTRAL_DIRECTORY_END_SIGNATURE {
+                let cde_start_pos = last_chunk_start + pos as u64;
+                if let Ok(end_header) = CentralDirectoryEnd::parse(&mut &last_chunk[pos..]) {
+                    return Ok((end_header, cde_start_pos));
 
         let search_lower_bound = 0;
 
@@ -347,19 +362,15 @@ impl Zip32CentralDirectoryEnd {
             if window_start == search_lower_bound {
                 break;
             }
-            /* Shift the window by END_WINDOW_SIZE bytes, but make sure to cover matches that
-             * overlap our nice neat window boundaries! */
-            window_start = (window_start
-                /* NB: To catch matches across window boundaries, we need to make our blocks overlap
-                 * by the width of the pattern to match. */
-                + mem::size_of::<Magic>() as u64)
+
+            window_start = window_start
                 /* This should never happen, but make sure we don't go past the end of the file. */
                 .min(file_length);
             window_start = window_start
                 .saturating_sub(
-                    /* Shift the window upon each iteration so we search END_WINDOW_SIZE bytes at
-                     * once (unless limited by file_length). */
-                    END_WINDOW_SIZE as u64,
+                    /* Shift the window by END_WINDOW_SIZE bytes, but make sure to cover matches that
+                     * overlap our nice neat window boundaries!*/
+                    (END_WINDOW_SIZE - mem::size_of::<Magic>()) as u64,
                 )
                 /* This will never go below the value of `search_lower_bound`, so we have a special
                  * `if window_start == search_lower_bound` check above. */
@@ -531,73 +542,94 @@ impl Zip64CentralDirectoryEnd {
         search_lower_bound: u64,
         search_upper_bound: u64,
     ) -> ZipResult<Vec<(Zip64CentralDirectoryEnd, u64)>> {
-        let mut results = Vec::new();
-
         const END_WINDOW_SIZE: usize = 2048;
         /* TODO: use static_assertions!() */
         debug_assert!(END_WINDOW_SIZE > mem::size_of::<Magic>());
+        let mut results = Vec::new();
+        let mut pos = search_upper_bound;
+      
 
-        const SIG_BYTES: [u8; mem::size_of::<Magic>()] =
-            Magic::ZIP64_CENTRAL_DIRECTORY_END_SIGNATURE.to_le_bytes();
-        let finder = FinderRev::new(&SIG_BYTES);
+        const HEADER_SIZE: usize = 56; /* does not include comment */
 
-        let mut window_start: u64 = search_upper_bound
-            .saturating_sub(END_WINDOW_SIZE as u64)
-            .max(search_lower_bound);
-        let mut window = [0u8; END_WINDOW_SIZE];
-        while window_start >= search_lower_bound {
-            reader.seek(io::SeekFrom::Start(window_start))?;
+        let mut buffer = Vec::new();
+        while pos >= nominal_offset {
+            reader.seek(io::SeekFrom::Start(pos))?;
 
-            /* Identify how many bytes to read (this may be less than the window size for files
-             * smaller than END_WINDOW_SIZE). */
-            let end = (window_start + END_WINDOW_SIZE as u64).min(search_upper_bound);
-
-            debug_assert!(end >= window_start);
-            let cur_len = (end - window_start) as usize;
-            if cur_len == 0 {
-                break;
-            }
-            debug_assert!(cur_len <= END_WINDOW_SIZE);
-            let cur_window: &mut [u8] = &mut window[..cur_len];
-            /* Read the window into the bytes! */
-            reader.read_exact(cur_window)?;
-
-            /* Find instances of the magic signature. */
-            for offset in finder.rfind_iter(cur_window) {
-                let cde_start_pos = window_start + offset as u64;
-                reader.seek(io::SeekFrom::Start(cde_start_pos))?;
-
-                debug_assert!(cde_start_pos >= search_lower_bound);
-                let archive_offset = cde_start_pos - search_lower_bound;
-                let cde = Self::parse(reader)?;
-
-                results.push((cde, archive_offset));
-            }
-
-            /* We always want to make sure we go allllll the way back to the start of the file if
-             * we can't find it elsewhere. However, our `while` condition doesn't check that. So we
-             * avoid infinite looping by checking at the end of the loop. */
-            if window_start == search_lower_bound {
-                break;
-            }
-            /* Shift the window by END_WINDOW_SIZE bytes, but make sure to cover matches that
-             * overlap our nice neat window boundaries! */
-            window_start = (window_start
-                /* NB: To catch matches across window boundaries, we need to make our blocks overlap
-                 * by the width of the pattern to match. */
-                + mem::size_of::<Magic>() as u64)
-                /* This may never happen, but make sure we don't go past the end of the specified
-                 * range. */
-                .min(search_upper_bound);
-            window_start = window_start
-                .saturating_sub(
-                    /* Shift the window upon each iteration so we search END_WINDOW_SIZE bytes at
-                     * once (unless limited by search_upper_bound). */
-                    END_WINDOW_SIZE as u64,
-                )
-                /* This will never go below the value of `search_lower_bound`, so we have a special
-                 * `if window_start == search_lower_bound` check above. */
+            buffer.resize(
+                std::cmp::min(4096, HEADER_SIZE + (search_upper_bound - pos) as usize),
+                0u8,
+            );
+            let mut window_start: u64 = search_upper_bound
+                .saturating_sub(END_WINDOW_SIZE as u64)
                 .max(search_lower_bound);
+            let mut window = [0u8; END_WINDOW_SIZE];
+            while window_start >= search_lower_bound {
+                reader.seek(io::SeekFrom::Start(window_start))?;
+
+                /* Identify how many bytes to read (this may be less than the window size for files
+                 * smaller than END_WINDOW_SIZE). */
+                let end = (window_start + END_WINDOW_SIZE as u64).min(search_upper_bound);
+
+                debug_assert!(end >= window_start);
+                let cur_len = (end - window_start) as usize;
+                if cur_len == 0 {
+                    break;
+                }
+                debug_assert!(cur_len <= END_WINDOW_SIZE);
+                let cur_window: &mut [u8] = &mut window[..cur_len];
+                /* Read the window into the bytes! */
+                reader.read_exact(cur_window)?;
+                reader.read_exact(&mut buffer)?;
+                let mut has_end_sig = false;
+                const SIG_BYTES: [u8; mem::size_of::<Magic>()] =
+                    Magic::ZIP64_CENTRAL_DIRECTORY_END_SIGNATURE.to_le_bytes();
+                let finder = FinderRev::new(&SIG_BYTES);
+                /* Find instances of the magic signature. */
+                for offset in finder.rfind_iter(cur_window) {
+                    has_end_sig = true;
+                    let cde_start_pos = window_start + offset as u64;
+                    reader.seek(io::SeekFrom::Start(cde_start_pos))?;
+
+                    debug_assert!(cde_start_pos >= search_lower_bound);
+                    let archive_offset = cde_start_pos - search_lower_bound;
+                    let cde = Self::parse(reader)?;
+
+                    results.push((cde, archive_offset));
+                }
+
+                /* We always want to make sure we go allllll the way back to the start of the file if
+                 * we can't find it elsewhere. However, our `while` condition doesn't check that. So we
+                 * avoid infinite looping by checking at the end of the loop. */
+                if window_start == search_lower_bound {
+                    break;
+                }
+                /* Shift the window by END_WINDOW_SIZE bytes, but make sure to cover matches that
+                 * overlap our nice neat window boundaries! */
+                window_start = (window_start
+                    /* NB: To catch matches across window boundaries, we need to make our blocks overlap
+                     * by the width of the pattern to match. */
+                    + mem::size_of::<Magic>() as u64)
+                    /* This may never happen, but make sure we don't go past the end of the specified
+                     * range. */
+                    .min(search_upper_bound);
+                window_start = window_start
+                    .saturating_sub(
+                        /* Shift the window upon each iteration so we search END_WINDOW_SIZE bytes at
+                         * once (unless limited by search_upper_bound). */
+                        END_WINDOW_SIZE as u64,
+                    )
+                    /* This will never go below the value of `search_lower_bound`, so we have a special
+                     * `if window_start == search_lower_bound` check above. */
+                    .max(search_lower_bound);
+            }
+            let Some(new_pos) = pos.checked_sub(if has_end_sig {
+                size_of_val(&ZIP64_CENTRAL_DIRECTORY_END_SIGNATURE) as u64
+            } else {
+                1
+            }) else {
+                break;
+            };
+            pos = new_pos;
         }
 
         if results.is_empty() {
@@ -683,5 +715,113 @@ mod test {
         c.set_position(0);
         let block2 = TestBlock::parse(&mut c).unwrap();
         assert_eq!(block, block2);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn zero_length_zip() {
+        use super::CentralDirectoryEnd;
+        use std::io;
+
+        let v = vec![];
+        let cde = CentralDirectoryEnd::find_and_parse(&mut io::Cursor::new(&v));
+        assert!(cde.is_err());
+    }
+
+    #[test]
+    fn invalid_cde_too_small() {
+        use super::CentralDirectoryEnd;
+        use std::io;
+
+        // This is a valid CDE that _just_ fits (though there's nothing in front of it, so the offsets are wrong)
+        let v = vec![
+            0x50, 0x4b, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x03, 0x00, 0xe5, 0x00,
+            0x00, 0x00, 0xd3, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let cde = CentralDirectoryEnd::find_and_parse(&mut io::Cursor::new(&v));
+        assert!(cde.is_ok()); // This is ok, the offsets are checked elsewhere.
+
+        // This is the same except the CDE is truncated by 4 bytes
+        let cde = CentralDirectoryEnd::find_and_parse(&mut io::Cursor::new(&v[0..v.len() - 4]));
+        assert!(cde.is_err());
+    }
+
+    #[test]
+    fn invalid_cde_missing() {
+        use super::CentralDirectoryEnd;
+        use std::io;
+
+        let v = [0; 70000]; // something larger than 65536 + CDE size
+        let cde = CentralDirectoryEnd::find_and_parse(&mut io::Cursor::new(&v));
+        assert!(cde.is_err());
+
+        let v = [0; 256]; // something smaller than 65536 but larger CDE size
+        let cde = CentralDirectoryEnd::find_and_parse(&mut io::Cursor::new(&v));
+        assert!(cde.is_err());
+    }
+
+    fn zip64_cde_search(cde_start_pos: usize, total_size: usize) -> u64 {
+        use super::Zip64CentralDirectoryEnd;
+        use std::io;
+
+        // 56 byte zip64 Central Directory End (extracted manually from tests/data/zip64_demo.zip)
+        let cde64 = vec![
+            0x50, 0x4b, 0x06, 0x06, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1e, 0x03,
+            0x2d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2f, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+
+        let mut haystack = vec![0u8; cde_start_pos];
+        haystack.extend_from_slice(&cde64);
+        haystack.resize(total_size, 0u8);
+        let results = Zip64CentralDirectoryEnd::find_and_parse(
+            &mut io::Cursor::new(&haystack),
+            0,
+            haystack.len() as u64 - 56,
+        )
+        .expect("find_and_parse");
+        let (_, offset) = results
+            .into_iter()
+            .max_by_key(|(_, offset)| *offset)
+            .unwrap();
+        offset
+    }
+
+    #[test]
+    fn zip64_cde_search_less_than_chunk_at_start() {
+        assert_eq!(0, zip64_cde_search(0, 100));
+    }
+
+    #[test]
+    fn zip64_cde_search_less_than_chunk_in_middle() {
+        assert_eq!(100, zip64_cde_search(100, 300));
+    }
+
+    #[test]
+    fn zip64_cde_search_less_than_chunk_at_end() {
+        assert_eq!(100, zip64_cde_search(100, 156));
+    }
+
+    #[test]
+    fn zip64_cde_search_more_than_chunk_at_chunk_start() {
+        assert_eq!(4096, zip64_cde_search(4096, 4200));
+    }
+
+    #[test]
+    fn zip64_cde_search_more_than_chunk_mid_chunk() {
+        assert_eq!(5000, zip64_cde_search(5000, 9000));
+    }
+
+    #[test]
+    fn zip64_cde_search_more_than_chunk_at_chunk_end() {
+        assert_eq!(8192 - 56, zip64_cde_search(8192 - 56, 8192));
+    }
+
+    #[test]
+    fn zip64_cde_search_more_than_chunk_straddling_chunk_end() {
+        assert_eq!(4096 - 30, zip64_cde_search(4096 - 30, 4200));
     }
 }

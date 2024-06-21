@@ -773,7 +773,8 @@ impl<R: Read + Seek> ZipArchive<R> {
             Err(e) => invalid_errors.push(e),
             Ok(o) => {
                 if o.files.len() == footer.number_of_files as usize
-                        || footer.number_of_files == ZIP64_ENTRY_THR as u16 {
+                    || footer.number_of_files == ZIP64_ENTRY_THR as u16
+                {
                     ok_results.push((footer.clone(), o))
                 } else {
                     invalid_errors.push(InvalidArchive("wrong number of files"))
@@ -1777,7 +1778,6 @@ pub fn read_zipfile_from_seekablestream<S: Read + Seek>(
 
                 // check if the data descriptor is indeed valid for the read data
                 if data_descriptor.compressed_size == read_count_total as u32 {
-                    // todo also check crc
                     // valid data descriptor
 
                     // seek back to data start
@@ -1791,8 +1791,8 @@ pub fn read_zipfile_from_seekablestream<S: Read + Seek>(
                 } else {
                     // data descriptor is invalid
 
-                    reader.seek(SeekFrom::Current(4))?; // skip the magic number
-                    read_count_total += 4;
+                    reader.seek(SeekFrom::Current(1))?; // skip the magic number
+                    read_count_total += 1;
 
                     // continue data descriptor searching
                 }
@@ -1808,7 +1808,7 @@ pub fn read_zipfile_from_seekablestream<S: Read + Seek>(
 /// and return the magic number and the number of bytes read since the call to this function.
 ///
 /// This function is useful in combination with [read_zipfile_from_seekablestream] to read multiple zip files from a single stream.
-/// This function will ever seek back 4 bytes and not before the initial position of the stream when the function was called.
+/// This function will never seek back more than 4 bytes and not before the initial position of the stream when the function was called.
 ///
 /// The stream will be positioned at the start of the magic number.
 ///
@@ -1870,11 +1870,10 @@ fn advance_stream_to_next_magic_start<S: Read + Seek>(
     }
 }
 
-/// Advance the stream to the next zip file start (local file header start)
-/// and return the magic number and the number of bytes read since the call to this function.
+/// Advance the stream to the next zip file start (local file header start) returning the number of bytes read since the call to this function.
 ///
 /// This function is useful in combination with [read_zipfile_from_seekablestream] to read multiple zip files from a single stream.
-/// This function will ever seek back 4 bytes and not before the initial position of the stream when the function was called.
+/// This function will never seek back more than 4 bytes and not before the initial position of the stream when the function was called.
 ///
 /// The stream will be positioned at the start of the zip file start (local file header start).
 ///

@@ -1815,7 +1815,7 @@ pub fn read_zipfile_from_seekablestream<S: Read + Seek>(
 /// Returns the found magic number and the number of bytes read since the call to this function.
 fn advance_stream_to_next_magic<S: Read + Seek>(
     reader: &mut S,
-) -> ZipResult<Option<(Magic, usize)>> {
+) -> ZipResult<Option<(spec::Magic, usize)>> {
     let mut shift_register: u32 = 0;
     let mut read_buffer = [0u8; 1];
 
@@ -1850,7 +1850,7 @@ fn advance_stream_to_next_magic<S: Read + Seek>(
 /// Like advance_stream_to_next_magic but advances until given Magic is encountered
 fn advance_stream_to_next_magic_start<S: Read + Seek>(
     reader: &mut S,
-    target_magic: Magic,
+    target_magic: spec::Magic,
 ) -> ZipResult<Option<usize>> {
     let mut bytes_read_total = 0;
 

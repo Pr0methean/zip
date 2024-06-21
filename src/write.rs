@@ -167,7 +167,7 @@ pub(crate) mod zip_writer {
             f.write_fmt(format_args!(
                 "ZipWriter {{files: {:?}, stats: {:?}, writing_to_file: {}, writing_raw: {}, comment: {:?}, flush_on_finish_file: {}}}",
                 self.files, self.stats, self.writing_to_file, self.writing_raw,
-                String::from_utf8(self.comment.to_vec()), self.flush_on_finish_file))
+                self.comment, self.flush_on_finish_file))
         }
     }
 }
@@ -3409,6 +3409,63 @@ mod test {
         writer = ZipWriter::new_append(finished)?;
         assert_eq!(writer.get_raw_comment()[0], 0);
         let _ = writer.finish_into_readable()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_fuzz_crash_2024_06_19() -> ZipResult<()> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer.set_flush_on_finish_file(false);
+        let options = FileOptions {
+            compression_method: Stored,
+            compression_level: None,
+            last_modified_time: DateTime::from_date_and_time(1980, 3, 1, 19, 55, 58)?,
+            permissions: None,
+            large_file: false,
+            encrypt_with: None,
+            extended_options: ExtendedFileOptions {
+                extra_data: vec![].into(),
+                central_extra_data: vec![].into(),
+            },
+            alignment: 256,
+            ..Default::default()
+        };
+        writer.start_file_from_path(
+            "\0\0\0PK\u{5}\u{6}\0\0\0\0\u{1}\0\u{12}\u{6}\0\0\0\0\0\u{1}\0\0\0\0\0\0\0\0\0",
+            options,
+        )?;
+        writer.set_flush_on_finish_file(false);
+        writer.shallow_copy_file_from_path(
+            "\0\0\0PK\u{5}\u{6}\0\0\0\0\u{1}\0\u{12}\u{6}\0\0\0\0\0\u{1}\0\0\0\0\0\0\0\0\0",
+            "",
+        )?;
+        writer.set_flush_on_finish_file(false);
+        writer.deep_copy_file_from_path("", "copy")?;
+        writer.abort_file()?;
+        writer.set_flush_on_finish_file(false);
+        writer.set_raw_comment([255, 0].into());
+        writer.abort_file()?;
+        assert_eq!(writer.get_raw_comment(), [255, 0]);
+        writer = ZipWriter::new_append(writer.finish_into_readable()?.into_inner())?;
+        assert_eq!(writer.get_raw_comment(), [255, 0]);
+        writer.set_flush_on_finish_file(false);
+        let options = FileOptions {
+            compression_method: Stored,
+            compression_level: None,
+            last_modified_time: DateTime::default(),
+            permissions: None,
+            large_file: false,
+            encrypt_with: None,
+            extended_options: ExtendedFileOptions {
+                extra_data: vec![].into(),
+                central_extra_data: vec![].into(),
+            },
+            ..Default::default()
+        };
+        writer.start_file_from_path("", options)?;
+        assert_eq!(writer.get_raw_comment(), [255, 0]);
+        let archive = writer.finish_into_readable()?;
+        assert_eq!(archive.comment(), [255, 0]);
         Ok(())
     }
 }

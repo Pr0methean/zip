@@ -133,7 +133,7 @@ impl <'k> Debug for FuzzTestCase<'k> {
         self.operations.iter().map(|op| {
             f.write_fmt(format_args!("{:?}", op.0))?;
             if op.1 {
-                f.write_str("writer.abort_file()?;")
+                f.write_str("writer.abort_file()?;\n")
             } else {
                 Ok(())
             }
@@ -167,6 +167,7 @@ fn do_operation<'k, T>(
 where
     T: Read + Write + Seek,
 {
+    println!("do_operation(writer, {:?}, {:?}, {:?}, {:?})", operation, abort, flush_on_finish_file, files_added);
     writer.set_flush_on_finish_file(flush_on_finish_file);
     let mut path = Cow::Borrowed(&operation.path);
     match &operation.basic {
@@ -196,19 +197,23 @@ where
         }
         BasicFileOperation::ShallowCopy(base) => {
             let Some(base_path) = base.get_path() else {
+                println!("Skipping ShallowCopy because no base_path");
                 return Ok(());
             };
             deduplicate_paths(&mut path, &base_path);
             do_operation(writer, &base, false, flush_on_finish_file, files_added)?;
+            println!("Shallow copying {:?} to {:?}", base_path, path);
             writer.shallow_copy_file_from_path(&*base_path, &*path)?;
             *files_added += 1;
         }
         BasicFileOperation::DeepCopy(base) => {
             let Some(base_path) = base.get_path() else {
+                println!("Skipping DeepCopy because no base_path");
                 return Ok(());
             };
             deduplicate_paths(&mut path, &base_path);
             do_operation(writer, &base, false, flush_on_finish_file, files_added)?;
+            println!("Deep copying {:?} to {:?}", base_path, path);
             writer.deep_copy_file_from_path(&*base_path, &*path)?;
             *files_added += 1;
         }
@@ -232,6 +237,7 @@ where
         }
     }
     if abort && *files_added != 0 {
+        println!("Calling abort_file()");
         writer.abort_file()?;
         *files_added -= 1;
     }
@@ -242,16 +248,20 @@ where
         ReopenOption::DoNotReopen => return Ok(()),
         ReopenOption::ViaFinish => {
             let old_comment = writer.get_raw_comment().to_owned();
+            println!("ViaFinish: old_comment: {:?}", old_comment);
             replace_with_or_abort(writer, |old_writer: zip::ZipWriter<T>| {
                 zip::ZipWriter::new_append(old_writer.finish().unwrap()).unwrap()
             });
+            println!("writer.get_raw_comment(): {:?}", writer.get_raw_comment());
             assert!(writer.get_raw_comment().starts_with(&old_comment));
         },
         ReopenOption::ViaFinishIntoReadable => {
             let old_comment = writer.get_raw_comment().to_owned();
+            println!("ViaFinishIntoReadable: {:?}", writer);
             replace_with_or_abort(writer, |old_writer: zip::ZipWriter<T>| {
                 zip::ZipWriter::new_append(old_writer.finish_into_readable().unwrap().into_inner()).unwrap()
             });
+            println!("writer: {:?}", writer);
             assert!(writer.get_raw_comment().starts_with(&old_comment));
         },
     }

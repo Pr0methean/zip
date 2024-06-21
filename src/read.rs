@@ -8,7 +8,7 @@ use crate::crc32::Crc32Reader;
 use crate::extra_fields::{ExtendedTimestamp, ExtraField};
 use crate::read::zip_archive::{Shared, SharedBuilder};
 use crate::result::{ZipError, ZipResult};
-use crate::spec::{self, FixedSizeBlock, Magic, Zip32CentralDirectoryEnd};
+use crate::spec::{self, FixedSizeBlock, Zip32CentralDirectoryEnd, ZIP64_ENTRY_THR};
 use crate::types::{
     AesMode, AesVendorVersion, DateTime, System, ZipCentralEntryBlock, ZipDataDescriptor,
     ZipFileData, ZipLocalEntryBlock, ZipLocalEntryBlockAndFields,
@@ -771,7 +771,14 @@ impl<R: Read + Seek> ZipArchive<R> {
                 unsupported_errors.push(ZipError::UnsupportedArchive(e))
             }
             Err(e) => invalid_errors.push(e),
-            Ok(o) => ok_results.push((footer.clone(), o)),
+            Ok(o) => {
+                if o.files.len() == footer.number_of_files as usize
+                        || footer.number_of_files == ZIP64_ENTRY_THR as u16 {
+                    ok_results.push((footer.clone(), o))
+                } else {
+                    invalid_errors.push(InvalidArchive("wrong number of files"))
+                }
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 #!/bin/bash
-rm -r "fuzz/corpus/fuzz_$1_old"
+set -euxo pipefail
+rm -r "fuzz/corpus/fuzz_$1_old" || true
 ncpus=$(nproc || getconf NPROCESSORS_ONLN)
 ncpus=$(( ncpus / ( 1 + $(cat /sys/devices/system/cpu/smt/active))))
 MAX_ITERS_WITHOUT_IMPROVEMENT=3

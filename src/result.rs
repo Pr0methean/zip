@@ -96,3 +96,35 @@ impl fmt::Display for DateTimeRangeError {
 }
 
 impl Error for DateTimeRangeError {}
+
+/// Represents a potentially untrusted untrustworthy value.
+///
+/// An attacker might be able to control (part) of the returned value.
+/// Take special care processing this data.
+///
+/// See the method documentation of the function returning this value
+pub struct UntrustedValue<T> {
+    value: T,
+}
+
+impl<T> UntrustedValue<T> {
+    /// Be sure that you carefully handle the returned value since
+    /// it may be controllable by a malicious actor.
+    ///
+    /// See the method documentation of the function returning this value
+    pub fn use_untrusted_value(self) -> T {
+        self.value
+    }
+
+    /// Wraps the provided value as UntrustedValue
+    pub fn wrap(value: T) -> Self {
+        UntrustedValue {value}
+    }
+}
+
+impl<T> From<T> for UntrustedValue<T> {
+    fn from(value: T) -> Self {
+        UntrustedValue::wrap(value)
+    }
+}
+

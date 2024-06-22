@@ -7,12 +7,9 @@ use crate::cp437::FromCp437;
 use crate::crc32::Crc32Reader;
 use crate::extra_fields::{ExtendedTimestamp, ExtraField};
 use crate::read::zip_archive::{Shared, SharedBuilder};
-use crate::result::{ZipError, ZipResult};
+use crate::result::{UntrustedValue, ZipError, ZipResult};
 use crate::spec::{self, FixedSizeBlock, Zip32CentralDirectoryEnd, ZIP64_ENTRY_THR};
-use crate::types::{
-    AesMode, AesVendorVersion, DateTime, System, ZipCentralEntryBlock, ZipDataDescriptor,
-    ZipFileData, ZipLocalEntryBlock, ZipLocalEntryBlockAndFields,
-};
+use crate::types::{AesMode, AesVendorVersion, DateTime, System, ZipCentralEntryBlock, ZipDataDescriptor, ZipFileData, ZipLocalEntryBlock, ZipLocalEntryBlockAndFields};
 use crate::zipcrypto::{ZipCryptoReader, ZipCryptoReaderValid, ZipCryptoValidator};
 use indexmap::IndexMap;
 use std::borrow::Cow;
@@ -1674,13 +1671,13 @@ fn read_zipfile_from_fileblock<'a, R: Read>(
 /// the structure is done.
 ///
 /// This method will not find a ZipFile entry if the zip file uses data descriptors.
-/// In that case you could use [read_zipfile_from_seekable_stream]
+/// In that case you could use read_zipfile_from_seekable_stream
 ///
 /// Missing fields are:
 /// * `comment`: set to an empty string
 /// * `data_start`: set to 0
 /// * `external_attributes`: `unix_mode()`: will return None
-pub fn read_zipfile_from_stream<'a, R: Read>(reader: &'a mut R) -> ZipResult<Option<ZipFile<'_>>> {
+pub fn read_zipfile_from_stream<R: Read>(reader: &mut R) -> ZipResult<Option<ZipFile>> {
     let block = read_local_fileblock(reader)?;
     let block = match block {
         Some(block) => block,
@@ -1688,7 +1685,6 @@ pub fn read_zipfile_from_stream<'a, R: Read>(reader: &'a mut R) -> ZipResult<Opt
     };
 
     // we can't look for a data descriptor since we can't seek back
-    // TODO: provide a method that buffers the read data and allows seeking back
     read_zipfile_from_fileblock(block, reader, None)
 }
 
@@ -1696,6 +1692,7 @@ pub fn read_zipfile_from_stream<'a, R: Read>(reader: &'a mut R) -> ZipResult<Opt
 ///
 /// This is an alternative method to read a zip file. If possible, use the ZipArchive functions
 /// as some information will be missing when reading this manner.
+/// If otherwise possible use read_zipfile_from_stream.
 ///
 /// Reads a file header from the start of the stream. Will return `Ok(Some(..))` if a file is
 /// present at the start of the stream. Returns `Ok(None)` if the start of the central directory
@@ -1706,6 +1703,8 @@ pub fn read_zipfile_from_stream<'a, R: Read>(reader: &'a mut R) -> ZipResult<Opt
 ///
 /// This method will not find a ZipFile entry if the zip file uses central directory encryption.
 /// In that case you should use ZipArchive functions.
+///
+/// This method will not seek back before the initial position of the stream when the function was called.
 ///
 /// This method is superior to ZipArchive in the special case that the underlying stream implementation must
 /// buffer all seen/read data to provide seek back support and the memory consumption must be kept small.
@@ -1721,17 +1720,23 @@ pub fn read_zipfile_from_stream<'a, R: Read>(reader: &'a mut R) -> ZipResult<Opt
 /// the underlying stream implementation may discard, after dropping ZipFile, all buffered data before the current position of the stream.
 /// Summarizing: In given scenario, this method must not buffer the whole B.zip file to RAM, but only the first file entry.
 ///
+/// *Security-disclaimer*: The *output* of *this function* should *not* be regarded as *secure/trustworthy*.
+/// When an attacker has control over a file which is compressed into a zip: The file might be crafted such that
+/// when reading with ZipArchive vs this function a parsing mismatch will occur. An attacker that has control over a file
+/// which is compressed in such a way that this function will regard parts of the file as new zip file entry. The attacker might
+/// therefore inject custom zip file entries with attacker controlled content/name/metadata.
+///
 /// Missing fields are:
 /// * `comment`: set to an empty string
 /// * `data_start`: set to 0
 /// * `external_attributes`: `unix_mode()`: will return None
-pub fn read_zipfile_from_seekablestream<S: Read + Seek>(
+pub fn read_zipfile_from_limitedseekable_stream<S: Read + Seek>(
     reader: &mut S,
-) -> ZipResult<Option<ZipFile>> {
+) -> ZipResult<UntrustedValue<Option<ZipFile>>> {
     let local_entry_block = read_local_fileblock(reader)?;
     let local_entry_block = match local_entry_block {
         Some(local_entry_block) => local_entry_block,
-        None => return Ok(None),
+        None => return Ok(None.into()),
     };
 
     let using_data_descriptor = local_entry_block.block.flags & (1 << 3) == 1 << 3;
@@ -1744,13 +1749,13 @@ pub fn read_zipfile_from_seekablestream<S: Read + Seek>(
         loop {
             let read_count = reader.read(&mut read_buffer)?;
             if read_count == 0 {
-                return Ok(None); // EOF
+                return Ok(None.into()); // EOF
             }
 
             read_count_total += read_count;
 
             if read_count_total > u32::MAX as usize {
-                return Ok(None); // file too large
+                return Ok(None.into()); // file too large
             }
 
             shift_register = shift_register >> 8 | (read_buffer[0] as u32) << 24;
@@ -1787,7 +1792,7 @@ pub fn read_zipfile_from_seekablestream<S: Read + Seek>(
                         local_entry_block,
                         reader,
                         Some(data_descriptor),
-                    );
+                    ).map(|result| result.into());
                 } else {
                     // data descriptor is invalid
 
@@ -1800,14 +1805,14 @@ pub fn read_zipfile_from_seekablestream<S: Read + Seek>(
         }
     } else {
         // dont using a data descriptor
-        read_zipfile_from_fileblock(local_entry_block, reader, None)
+        read_zipfile_from_fileblock(local_entry_block, reader, None).map(|result| result.into())
     }
 }
 
 /// Advance the stream to the next zip file magic number (local file header, central directory header, data descriptor)
 /// and return the magic number and the number of bytes read since the call to this function.
 ///
-/// This function is useful in combination with [read_zipfile_from_seekablestream] to read multiple zip files from a single stream.
+/// This function is useful in combination with read_zipfile_from_limitedseekable_stream to read multiple zip files from a single stream.
 /// This function will never seek back more than 4 bytes and not before the initial position of the stream when the function was called.
 ///
 /// The stream will be positioned at the start of the magic number.
@@ -1872,7 +1877,7 @@ fn advance_stream_to_next_magic_start<S: Read + Seek>(
 
 /// Advance the stream to the next zip file start (local file header start) returning the number of bytes read since the call to this function.
 ///
-/// This function is useful in combination with [read_zipfile_from_seekablestream] to read multiple zip files from a single stream.
+/// This function is useful in combination with read_zipfile_from_limitedseekable_stream to read multiple zip files from a single stream.
 /// This function will never seek back more than 4 bytes and not before the initial position of the stream when the function was called.
 ///
 /// The stream will be positioned at the start of the zip file start (local file header start).

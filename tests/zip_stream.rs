@@ -8,8 +8,9 @@ fn decompress_stream_no_data_descriptor() {
     v.extend_from_slice(include_bytes!("data/deflate64.zip"));
     let mut stream = io::Cursor::new(v);
 
-    let mut entry = zip::read::read_zipfile_from_seekablestream(&mut stream)
+    let mut entry = zip::read::read_zipfile_from_limitedseekable_stream(&mut stream)
         .expect("couldn't open test zip file")
+        .use_untrusted_value()
         .expect("did not find file entry in zip file");
     assert_eq!("binary.wmv", entry.name());
 
@@ -43,8 +44,9 @@ fn decompress_stream_with_data_descriptor() {
     v.extend_from_slice(include_bytes!("data/data_descriptor.zip"));
     let mut stream = io::Cursor::new(v);
 
-    let mut entry = zip::read::read_zipfile_from_seekablestream(&mut stream)
+    let mut entry = zip::read::read_zipfile_from_limitedseekable_stream(&mut stream)
         .expect("couldn't open test zip file")
+        .use_untrusted_value()
         .expect("did not find file entry in zip file");
     assert_eq!("hello.txt", entry.name());
 
@@ -63,8 +65,9 @@ fn decompress_stream_with_data_descriptor_continue() {
 
     // First entry
 
-    let mut entry = zip::read::read_zipfile_from_seekablestream(&mut stream)
+    let mut entry = zip::read::read_zipfile_from_limitedseekable_stream(&mut stream)
         .expect("couldn't open test zip file")
+        .use_untrusted_value()
         .expect("did not find file entry in zip file");
     assert_eq!("hello.txt", entry.name());
 
@@ -81,8 +84,9 @@ fn decompress_stream_with_data_descriptor_continue() {
     zip::read::advance_stream_to_next_zipfile_start(&mut stream)
         .expect("couldn't advance to next entry in zip file");
 
-    let mut entry = zip::read::read_zipfile_from_seekablestream(&mut stream)
+    let mut entry = zip::read::read_zipfile_from_limitedseekable_stream(&mut stream)
         .expect("couldn't open test zip file")
+        .use_untrusted_value()
         .expect("did not find file entry in zip file");
     assert_eq!("world.txt", entry.name());
 

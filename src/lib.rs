@@ -21,6 +21,7 @@
 //! | Deflate64 | ✅ | |
 //! | Bzip2 | ✅ | ✅ |
 //! | LZMA | ✅ | |
+//! | XZ | ✅ | |
 //! | AES encryption | ✅ | ✅ |
 //! | ZipCrypto deprecated encryption | ✅ | ✅ |
 //!

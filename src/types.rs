@@ -570,6 +570,8 @@ impl ZipFileData {
             CompressionMethod::Deflate64 => 21,
             #[cfg(feature = "lzma")]
             CompressionMethod::Lzma => 63,
+            #[cfg(feature = "xz")]
+            CompressionMethod::Xz => 63,
             // APPNOTE doesn't specify a version for Zstandard
             _ => DEFAULT_VERSION as u16,
         };

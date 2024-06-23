@@ -174,7 +174,7 @@ pub(crate) mod zip_writer {
 #[doc(inline)]
 pub use self::sealed::FileOptionExtension;
 use crate::result::ZipError::InvalidArchive;
-#[cfg(feature = "lzma")]
+#[cfg(any(feature = "lzma", feature = "xz"))]
 use crate::result::ZipError::UnsupportedArchive;
 use crate::unstable::path_to_string;
 use crate::unstable::LittleEndianWriteExt;
@@ -1701,6 +1701,10 @@ impl<W: Write + Seek> GenericZipWriter<W> {
                 #[cfg(feature = "lzma")]
                 CompressionMethod::Lzma => {
                     Err(UnsupportedArchive("LZMA isn't supported for compression"))
+                }
+                #[cfg(feature = "xz")]
+                CompressionMethod::Xz => {
+                    Err(UnsupportedArchive("XZ isn't supported for compression"))
                 }
                 CompressionMethod::Unsupported(..) => {
                     Err(ZipError::UnsupportedArchive("Unsupported compression"))

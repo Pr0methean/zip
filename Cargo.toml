@@ -78,6 +78,7 @@ deflate-zlib-ng = ["flate2/zlib-ng", "deflate-flate2"]
 deflate-zopfli = ["zopfli", "_deflate-any"]
 lzma = ["lzma-rs/stream"]
 unreserved = []
+xz = ["lzma-rs/raw_decoder"]
 default = [
     "aes-crypto",
     "bzip2",
@@ -86,6 +87,7 @@ default = [
     "lzma",
     "time",
     "zstd",
+    "xz",
 ]
 
 [[bench]]

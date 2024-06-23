@@ -19,7 +19,7 @@ use std::io::{self, copy, prelude::*, sink, SeekFrom};
 use std::marker::PhantomData;
 use std::mem;
 use std::mem::size_of;
-use std::ops::{Deref};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
@@ -67,7 +67,6 @@ pub(crate) mod zip_archive {
         pub(crate) files: Vec<super::ZipFileData>,
         pub(super) offset: u64,
         pub(super) dir_start: u64,
-        pub(super) dir_end: u64,
         // This isn't yet used anywhere, but it is here for use cases in the future.
         #[allow(dead_code)]
         pub(super) config: super::Config,
@@ -403,9 +402,11 @@ pub(crate) fn make_reader<T: Read>(
 pub(crate) struct CentralDirectoryInfo {
     pub(crate) archive_offset: u64,
     pub(crate) directory_start: u64,
+    pub(crate) cde_position: u64,
     pub(crate) number_of_files: usize,
     pub(crate) disk_number: u32,
     pub(crate) disk_with_central_directory: u32,
+    pub(crate) is_zip64: bool,
 }
 
 impl<R> ZipArchive<R> {
@@ -558,6 +559,8 @@ impl<R: Read + Seek> ZipArchive<R> {
             number_of_files,
             disk_number: footer.disk_number as u32,
             disk_with_central_directory: footer.disk_with_central_directory as u32,
+            cde_position: cde_start_pos,
+            is_zip64: false,
         })
     }
 
@@ -660,6 +663,8 @@ impl<R: Read + Seek> ZipArchive<R> {
                         number_of_files: footer64.number_of_files as usize,
                         disk_number: footer64.disk_number,
                         disk_with_central_directory: footer64.disk_with_central_directory,
+                        cde_position: cde_start_pos,
+                        is_zip64: true,
                     })
                 }
             }).collect();
@@ -672,8 +677,10 @@ impl<R: Read + Seek> ZipArchive<R> {
         config: Config,
         reader: &mut R,
     ) -> ZipResult<(Zip32CentralDirectoryEnd, Shared)> {
-        let mut invalid_errors = Vec::new();
-        let mut unsupported_errors = Vec::new();
+        let mut invalid_errors_32 = Vec::new();
+        let mut unsupported_errors_32 = Vec::new();
+        let mut invalid_errors_64 = Vec::new();
+        let mut unsupported_errors_64 = Vec::new();
         let mut ok_results = Vec::new();
         let cde_locations = spec::Zip32CentralDirectoryEnd::find_and_parse(reader)?;
         cde_locations
@@ -683,45 +690,85 @@ impl<R: Read + Seek> ZipArchive<R> {
                 let zip32_result =
                     Self::get_directory_info_zip32(&config, reader, &footer, cde_start_pos);
                 Self::sort_result(
-                    zip32_result
-                        .and_then(|result| Self::read_central_header(result, config, reader)),
-                    &mut invalid_errors,
-                    &mut unsupported_errors,
+                    zip32_result,
+                    &mut invalid_errors_32,
+                    &mut unsupported_errors_32,
                     &mut ok_results,
                     &footer,
                 );
+                let mut inner_results = Vec::with_capacity(1);
                 // Check if file has a zip64 footer
-                if let Ok(zip64_footers) =
-                    Self::get_directory_info_zip64(&config, reader, &footer, cde_start_pos)
-                {
-                    zip64_footers
-                        .into_iter()
-                        .map(|result| {
-                            result.and_then(|dir_info| {
-                                Self::read_central_header(dir_info, config, reader)
-                            })
-                        })
-                        .for_each(|result| {
-                            Self::sort_result(
-                                result,
-                                &mut invalid_errors,
-                                &mut unsupported_errors,
-                                &mut ok_results,
-                                &footer,
-                            )
-                        });
-                }
+                let zip64_vec_result =
+                    Self::get_directory_info_zip64(&config, reader, &footer, cde_start_pos);
+                Self::sort_result(
+                    zip64_vec_result,
+                    &mut invalid_errors_64,
+                    &mut unsupported_errors_64,
+                    &mut inner_results,
+                    &(),
+                );
+                inner_results.into_iter().for_each(|(_, results)| {
+                    results.into_iter().for_each(|result| {
+                        Self::sort_result(
+                            result,
+                            &mut invalid_errors_64,
+                            &mut unsupported_errors_64,
+                            &mut ok_results,
+                            &footer,
+                        );
+                    });
+                });
             });
-        if ok_results.is_empty() {
-            return Err(unsupported_errors
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| invalid_errors.into_iter().next().unwrap()));
+        ok_results.sort_by_key(|(_, result)| {
+            (
+                u64::MAX - result.cde_position, // try the last one first
+                !result.is_zip64,               // try ZIP64 first
+            )
+        });
+        let mut best_result = None;
+        for (footer, result) in ok_results {
+            let mut inner_result = Vec::with_capacity(1);
+            let is_zip64 = result.is_zip64;
+            Self::sort_result(
+                Self::read_central_header(result, config, reader),
+                if is_zip64 {
+                    &mut invalid_errors_64
+                } else {
+                    &mut invalid_errors_32
+                },
+                if is_zip64 {
+                    &mut unsupported_errors_64
+                } else {
+                    &mut unsupported_errors_32
+                },
+                &mut inner_result,
+                &(),
+            );
+            if let Some((_, shared)) = inner_result.into_iter().next() {
+                if shared.files.len() == footer.number_of_files as usize
+                    || (is_zip64 && footer.number_of_files == ZIP64_ENTRY_THR as u16)
+                {
+                    best_result = Some((footer, shared));
+                    break;
+                } else {
+                    if is_zip64 {
+                        &mut invalid_errors_64
+                    } else {
+                        &mut invalid_errors_32
+                    }
+                    .push(InvalidArchive("wrong number of files"))
+                }
+            }
         }
-        let (footer, shared) = ok_results
-            .into_iter()
-            .max_by_key(|(_, shared)| (shared.dir_end, u64::MAX - shared.dir_start))
-            .unwrap();
+        let Some((footer, shared)) = best_result else {
+            return Err(unsupported_errors_32
+                .into_iter()
+                .chain(unsupported_errors_64)
+                .chain(invalid_errors_32)
+                .chain(invalid_errors_64)
+                .next()
+                .unwrap());
+        };
         reader.seek(io::SeekFrom::Start(shared.dir_start))?;
         Ok((Rc::try_unwrap(footer).unwrap(), shared.build()))
     }
@@ -747,37 +794,27 @@ impl<R: Read + Seek> ZipArchive<R> {
             let file = central_header_to_zip_file(reader, dir_info.archive_offset)?;
             files.push(file);
         }
-        let dir_end = reader.stream_position()?;
         Ok(SharedBuilder {
             files,
             offset: dir_info.archive_offset,
             dir_start: dir_info.directory_start,
-            dir_end,
             config,
         })
     }
 
-    fn sort_result(
-        result: Result<SharedBuilder, ZipError>,
+    fn sort_result<T, U: Clone>(
+        result: ZipResult<T>,
         invalid_errors: &mut Vec<ZipError>,
         unsupported_errors: &mut Vec<ZipError>,
-        ok_results: &mut Vec<(Rc<Zip32CentralDirectoryEnd>, SharedBuilder)>,
-        footer: &Rc<Zip32CentralDirectoryEnd>,
+        ok_results: &mut Vec<(U, T)>,
+        footer: &U,
     ) {
         match result {
             Err(ZipError::UnsupportedArchive(e)) => {
                 unsupported_errors.push(ZipError::UnsupportedArchive(e))
             }
             Err(e) => invalid_errors.push(e),
-            Ok(o) => {
-                if o.files.len() == footer.number_of_files as usize
-                    || footer.number_of_files == ZIP64_ENTRY_THR as u16
-                {
-                    ok_results.push((footer.clone(), o))
-                } else {
-                    invalid_errors.push(InvalidArchive("wrong number of files"))
-                }
-            }
+            Ok(o) => ok_results.push((footer.clone(), o)),
         }
     }
 
@@ -1935,8 +1972,11 @@ pub fn advance_stream_to_next_zipfile_start<S: Read + Seek>(
 
 #[cfg(test)]
 mod test {
-    use crate::ZipArchive;
-    use std::io::Cursor;
+    use crate::result::ZipResult;
+    use crate::write::SimpleFileOptions;
+    use crate::CompressionMethod::Stored;
+    use crate::{ZipArchive, ZipWriter};
+    use std::io::{Cursor, Read, Write};
     use tempdir::TempDir;
 
     #[test]
@@ -2168,5 +2208,36 @@ mod test {
         v.extend_from_slice(include_bytes!("../tests/data/windows-7zip.zip"));
         let mut reader = ZipArchive::new(Cursor::new(v)).unwrap();
         reader.by_name("你好.txt").unwrap();
+    }
+
+    #[test]
+    fn test_64k_files() -> ZipResult<()> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions {
+            compression_method: Stored,
+            ..Default::default()
+        };
+        for i in 0..=u16::MAX {
+            let file_name = format!("{i}.txt");
+            writer.start_file(&*file_name, options)?;
+            writer.write_all(i.to_string().as_bytes())?;
+        }
+
+        let mut reader = ZipArchive::new(writer.finish()?)?;
+        for i in 0..=u16::MAX {
+            let expected_name = format!("{i}.txt");
+            let expected_contents = i.to_string();
+            let expected_contents = expected_contents.as_bytes();
+            let mut file = reader.by_name(&expected_name)?;
+            let mut contents = Vec::with_capacity(expected_contents.len());
+            file.read_to_end(&mut contents)?;
+            assert_eq!(contents, expected_contents);
+            drop(file);
+            contents.clear();
+            let mut file = reader.by_index(i as usize)?;
+            file.read_to_end(&mut contents)?;
+            assert_eq!(contents, expected_contents);
+        }
+        Ok(())
     }
 }

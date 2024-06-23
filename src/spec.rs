@@ -1,10 +1,11 @@
 #![macro_use]
 
 use crate::result::{ZipError, ZipResult};
+use core::mem;
+use core::mem::align_of;
 use memchr::memmem::FinderRev;
 use std::io;
 use std::io::prelude::*;
-use std::mem;
 use std::rc::Rc;
 
 /// "Magic" header values used in the zip spec to locate metadata records.
@@ -110,6 +111,10 @@ pub(crate) trait FixedSizeBlock: Sized + Copy {
             return Err(ZipError::InvalidArchive("Block is wrong size"));
         }
         let block_ptr: *const Self = bytes.as_ptr().cast();
+
+        // If alignment could be more than 1, we'd have to use read_unaligned() below
+        debug_assert_eq!(align_of::<Self>(), 1);
+
         let block = unsafe { block_ptr.read() }.from_le();
         if block.magic() != Self::MAGIC {
             return Err(Self::WRONG_MAGIC_ERROR);
@@ -136,6 +141,10 @@ pub(crate) trait FixedSizeBlock: Sized + Copy {
     fn serialize(self) -> Box<[u8]> {
         /* TODO: use Box::new_zeroed() when stabilized! */
         /* TODO: also consider using smallvec! */
+
+        // If alignment could be more than 1, we'd have to use write_unaligned() below
+        debug_assert_eq!(align_of::<Self>(), 1);
+
         let mut out_block = vec![0u8; mem::size_of::<Self>()].into_boxed_slice();
         let out_ptr: *mut Self = out_block.as_mut_ptr().cast();
         unsafe {

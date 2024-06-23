@@ -1812,7 +1812,7 @@ pub fn read_zipfile_from_limitedseekable_stream<S: Read + Seek>(
     let local_entry_block = read_local_fileblock(reader)?;
     let local_entry_block = match local_entry_block {
         Some(local_entry_block) => local_entry_block,
-        None => return Ok(None.into()),
+        None => return Ok(MaybeUntrusted::wrap_ok(None)),
     };
 
     let using_data_descriptor = local_entry_block.block.flags & (1 << 3) == 1 << 3;
@@ -1825,13 +1825,13 @@ pub fn read_zipfile_from_limitedseekable_stream<S: Read + Seek>(
         loop {
             let read_count = reader.read(&mut read_buffer)?;
             if read_count == 0 {
-                return Ok(None.into()); // EOF
+                return Ok(MaybeUntrusted::wrap_ok(None)); // EOF
             }
 
             read_count_total += read_count;
 
             if read_count_total > u32::MAX as usize {
-                return Ok(None.into()); // file too large
+                return Ok(MaybeUntrusted::wrap_ok(None)); // file too large
             }
 
             shift_register = shift_register >> 8 | (read_buffer[0] as u32) << 24;

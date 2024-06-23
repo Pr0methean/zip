@@ -669,6 +669,7 @@ impl ZipFileData {
     pub(crate) fn from_local_block(
         block: ZipLocalEntryBlockAndFields,
         data_descriptor: Option<ZipDataDescriptor>,
+        allow_empty_data_descriptor: bool,
     ) -> ZipResult<Self> {
         let ZipLocalEntryBlock {
             // magic,
@@ -696,9 +697,11 @@ impl ZipFileData {
         if using_data_descriptor {
             match data_descriptor {
                 None => {
-                    return Err(ZipError::UnsupportedArchive(
-                        "The file uses a data descriptor, but the provided input stream is not seekable or the data descriptor is missing.",
-                    ));
+                    if !allow_empty_data_descriptor {
+                        return Err(ZipError::UnsupportedArchive(
+                            "The file uses a data descriptor, but the provided input stream is not seekable or the data descriptor is missing.",
+                        ));
+                    }
                 }
                 Some(data_descriptor) => {
                     uncompressed_size = data_descriptor.uncompressed_size;

@@ -128,3 +128,68 @@ impl<T> From<T> for UntrustedValue<T> {
     }
 }
 
+/// Represents a value that might be untrusted. See UntrustedValue for more information.
+pub enum MaybeUntrusted<T> {
+    /// Trusted value variant
+    Ok(T),
+    /// Untrusted value variant
+    Untrusted(UntrustedValue<T>),
+}
+
+impl<T> MaybeUntrusted<T> {
+    /// Be sure that you carefully handle the returned value since
+    /// it may be controllable by a malicious actor (when it is a MaybeUntrusted::Untrusted).
+    ///
+    /// See the method documentation of the function returning this value
+    pub fn use_untrusted_value(self) -> T {
+        match self {
+            MaybeUntrusted::Ok(value) => value,
+            MaybeUntrusted::Untrusted(value) => value.use_untrusted_value(),
+        }
+    }
+
+    /// Unwraps the value if values is not untrusted, if untrusted returns the provided error message
+    pub fn unwrap_or_error(self, error: &'static str) -> Result<T, ZipError> {
+        match self {
+            MaybeUntrusted::Ok(value) => Ok(value),
+            MaybeUntrusted::Untrusted(_) => Err(ZipError::InvalidArchive(error)),
+        }
+    }
+
+    /// Returns true if the value is untrusted
+    pub fn is_untrusted(&self) -> bool {
+        match self {
+            MaybeUntrusted::Ok(_) => false,
+            MaybeUntrusted::Untrusted(_) => true,
+        }
+    }
+
+    /// Returns true if the value is not untrusted
+    pub fn is_ok(&self) -> bool {
+        !self.is_untrusted()
+    }
+
+    /// Wraps the provided values as Untrusted
+    pub fn wrap_untrusted(value: T) -> Self {
+        MaybeUntrusted::Untrusted(value.into())
+    }
+
+    /// Wraps the provided values as Ok
+    pub fn wrap_ok(value: T) -> Self {
+        MaybeUntrusted::Ok(value)
+    }
+
+    /// Wraps the provided value as maybe untrusted, according to given boolean
+    pub fn wrap(value: T, untrusted: bool) -> Self {
+        match untrusted {
+            true => Self::wrap_untrusted(value),
+            false => Self::wrap_ok(value),
+        }
+    }
+}
+
+impl<T> From<UntrustedValue<T>> for MaybeUntrusted<T> {
+    fn from(value: UntrustedValue<T>) -> Self {
+        MaybeUntrusted::Untrusted(value)
+    }
+}

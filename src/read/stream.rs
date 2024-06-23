@@ -40,7 +40,9 @@ impl<R: Read> ZipStreamReader<R> {
     /// Iterate over the stream and extract all file and their
     /// metadata.
     pub fn visit<V: ZipStreamVisitor>(mut self, visitor: &mut V) -> ZipResult<()> {
-        while let Some(mut file) = read_zipfile_from_stream(&mut self.0)? {
+        // todo allow data descriptors by passing the MaybeUntrusted to the user
+        // todo check if we are allowed to change the API signature
+        while let Some(mut file) = read_zipfile_from_stream(&mut self.0)?.unwrap_or_error("zip content size not given in header")? {
             visitor.visit_file(&mut file)?;
         }
 

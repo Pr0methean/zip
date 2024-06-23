@@ -1,5 +1,71 @@
 # Changelog
 
+## [3.0.0](https://github.com/zip-rs/zip2/compare/v2.1.3...v3.0.0) - 2024-06-23
+
+### <!-- 1 -->🐛 Bug Fixes
+- Some archives with over u16::MAX files were handled incorrectly or slowly ([#189](https://github.com/zip-rs/zip2/pull/189))
+- Check number of files when deciding whether a CDE is the real one
+- Could still select a fake CDE over a real one in some cases
+- May have to consider multiple CDEs before filtering for validity
+- We now keep searching for a real CDE header after read an invalid one from the file comment
+- Always search for data start when opening an archive for append, and reject the header if data appears to start after central directory
+- `deep_copy_file` no longer allows overwriting an existing file, to match the behavior of `shallow_copy_file`
+- File start position was wrong when extra data was present
+- Abort file if central extra data is too large
+- Overflow panic when central directory extra data is too large
+- ZIP64 header was being written twice when copying a file
+- ZIP64 header was being written to central header twice
+- Start position was incorrect when file had no extra data
+- Allow all reserved headers we can create
+- Fix a bug where alignment padding interacts with other extra-data fields
+- Fix bugs involving alignment padding and Unicode extra fields
+- Incorrect header when adding AES-encrypted files
+- Parse the extra field and reject it if invalid
+- Incorrect behavior following a rare combination of `merge_archive`, `abort_file` and `deep_copy_file`. As well, we now return an error when a file is being copied to itself.
+- path_to_string now properly handles the case of an empty path
+- Implement `Debug` for `ZipWriter` even when it's not implemented for the inner writer's type
+- Fix an issue where the central directory could be incorrectly detected
+- `finish_into_readable()` would corrupt the archive if the central directory had moved
+
+### <!-- 2 -->🚜 Refactor
+- Verify with debug assertions that no FixedSizeBlock expects a multi-byte alignment ([#198](https://github.com/zip-rs/zip2/pull/198))
+- Use new do_or_abort_file method
+
+### <!-- 4 -->⚡ Performance
+- Speed up CRC when encrypting small files
+- Limit the number of extra fields
+- Refactor extra-data validation
+- Store extra data in plain vectors until after validation
+- Only build one IndexMap after choosing among the possible valid headers
+- Simplify validation of empty extra-data fields
+- Validate automatic extra-data fields only once, even if several are present
+- Remove redundant `validate_extra_data()` call
+- Skip searching for the ZIP32 header if a valid ZIP64 header is present ([#189](https://github.com/zip-rs/zip2/pull/189))
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+- Fix a bug introduced by c934c824
+- Fix a failing unit test
+- Fix build errors on older Rust versions
+- Fix build
+- Fix another fuzz failure
+- Switch to `ok_or_abort_file`, and inline when that fails borrow checker
+- Switch to `ok_or_abort_file`, and inline when that fails borrow checker
+- Fix a build error
+- Fix boxed_local warning (can borrow instead)
+- Partial debug
+- Fix more errors when parsing multiple extra fields
+- Fix an error when decoding AES header
+- Fix an error caused by not allowing 0xa11e field
+- Bug fix: crypto_header was being counted toward extra_data_end
+- Bug fix: revert a change where crypto_header was incorrectly treated as an extra field
+- Fix a bug where a modulo of 0 was used
+- Fix a bug when ZipCrypto, alignment *and* a custom header are used
+- Fix a bug when both ZipCrypto and alignment are used
+- Fix another bug: header_end vs extra_data_end
+- Fix use of a stale value in a `debug_assert_eq!`
+- Fix: may still get an incorrect size if opening an invalid file for append
+- Fix: may need the absolute start as tiebreaker to ensure deterministic behavior
+
 ## [2.1.3](https://github.com/zip-rs/zip2/compare/v2.1.2...v2.1.3) - 2024-06-04
 
 ### <!-- 1 -->🐛 Bug Fixes

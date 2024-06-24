@@ -1,3 +1,4 @@
+use crate::result::MaybeUntrusted;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -40,12 +41,21 @@ impl<R: Read> ZipStreamReader<R> {
     /// Iterate over the stream and extract all file and their
     /// metadata.
     pub fn visit<V: ZipStreamVisitor>(mut self, visitor: &mut V) -> ZipResult<()> {
-        while let Some(mut file) = read_zipfile_from_stream(&mut self.0)? {
-            visitor.visit_file(&mut file)?;
+        let mut untrusted = false;
+
+        loop {
+            let file = read_zipfile_from_stream(&mut self.0)?;
+            untrusted = untrusted | file.is_untrusted();
+
+            let file = file.use_untrusted_value();
+            match file {
+                Some(mut file) => visitor.visit_file(MaybeUntrusted::wrap(&mut file, untrusted))?,
+                None => break,
+            }
         }
 
         while let Ok(metadata) = self.parse_central_directory() {
-            visitor.visit_additional_metadata(&metadata)?;
+            visitor.visit_additional_metadata(MaybeUntrusted::wrap(&metadata, untrusted))?;
         }
 
         Ok(())
@@ -57,14 +67,43 @@ impl<R: Read> ZipStreamReader<R> {
     /// Extraction is not atomic; If an error is encountered, some of the files
     /// may be left on disk.
     pub fn extract<P: AsRef<Path>>(self, directory: P) -> ZipResult<()> {
-        struct Extractor<'a>(&'a Path);
+        self.extract_unsafe(directory, false)
+    }
+
+    /// Extract a Zip archive into a directory, overwriting files if they
+    /// already exist. Paths are sanitized with [`ZipFile::enclosed_name`].
+    ///
+    /// Extraction is not atomic; If an error is encountered, some of the files
+    /// may be left on disk.
+    ///
+    /// **This is considered a security risk. Use at your own discretion.**
+    pub fn extract_untrusted<P: AsRef<Path>>(self, directory: P) -> ZipResult<()> {
+        self.extract_unsafe(directory, true)
+    }
+
+    fn extract_unsafe<P: AsRef<Path>>(self, directory: P, allow_untrusted: bool) -> ZipResult<()> {
+        struct Extractor<'a> {
+            path: &'a Path,
+            allow_untrusted: bool,
+        }
         impl ZipStreamVisitor for Extractor<'_> {
-            fn visit_file(&mut self, file: &mut ZipFile<'_>) -> ZipResult<()> {
+            fn visit_file(&mut self, file: MaybeUntrusted<&mut ZipFile<'_>>) -> ZipResult<()> {
+                let file = match file {
+                    MaybeUntrusted::Ok(file) => file,
+                    MaybeUntrusted::Untrusted(value) => {
+                        if self.allow_untrusted {
+                            value.use_untrusted_value()
+                        } else {
+                            return Err(ZipError::UnsupportedArchive("extracting a zip file stream-fashion with data descriptors is considered a security risk"));
+                        }
+                    }
+                };
+
                 let filepath = file
                     .enclosed_name()
                     .ok_or(ZipError::InvalidArchive("Invalid file path"))?;
 
-                let outpath = self.0.join(filepath);
+                let outpath = self.path.join(filepath);
 
                 if file.is_dir() {
                     fs::create_dir_all(&outpath)?;
@@ -82,15 +121,26 @@ impl<R: Read> ZipStreamReader<R> {
             #[allow(unused)]
             fn visit_additional_metadata(
                 &mut self,
-                metadata: &ZipStreamFileMetadata,
+                metadata: MaybeUntrusted<&ZipStreamFileMetadata>,
             ) -> ZipResult<()> {
                 #[cfg(unix)]
                 {
+                    let metadata = match metadata {
+                        MaybeUntrusted::Ok(file) => file,
+                        MaybeUntrusted::Untrusted(value) => {
+                            if self.allow_untrusted {
+                                value.use_untrusted_value()
+                            } else {
+                                return Err(ZipError::UnsupportedArchive("extracting a zip file stream-fashion with data descriptors is considered a security risk"));
+                            }
+                        }
+                    };
+
                     let filepath = metadata
                         .enclosed_name()
                         .ok_or(ZipError::InvalidArchive("Invalid file path"))?;
 
-                    let outpath = self.0.join(filepath);
+                    let outpath = self.path.join(filepath);
 
                     use std::os::unix::fs::PermissionsExt;
                     if let Some(mode) = metadata.unix_mode() {
@@ -102,7 +152,10 @@ impl<R: Read> ZipStreamReader<R> {
             }
         }
 
-        self.visit(&mut Extractor(directory.as_ref()))
+        self.visit(&mut Extractor {
+            path: directory.as_ref(),
+            allow_untrusted,
+        })
     }
 }
 
@@ -113,12 +166,29 @@ pub trait ZipStreamVisitor {
     ///     - `comment`: set to an empty string
     ///     - `data_start`: set to 0
     ///     - `external_attributes`: `unix_mode()`: will return None
-    fn visit_file(&mut self, file: &mut ZipFile<'_>) -> ZipResult<()>;
+    ///
+    /// In the case of parsing a zip file which contains data descriptors and an attacker can
+    /// control files that were compressed to the zip file the returned data is not trusted and
+    /// partly attacker controllable. Everything returned by this function should be regarded untrusted
+    /// (file name, content, file count, ...). Take care handling the output.
+    ///
+    /// To be on the safe side use `.unwrap_or_error(...)` on the `MaybeUntrusted` parameter.
+    fn visit_file(&mut self, file: MaybeUntrusted<&mut ZipFile<'_>>) -> ZipResult<()>;
 
     /// This function is guranteed to be called after all `visit_file`s.
     ///
     ///  * `metadata` - Provides missing metadata in `visit_file`.
-    fn visit_additional_metadata(&mut self, metadata: &ZipStreamFileMetadata) -> ZipResult<()>;
+    ///
+    /// In the case of parsing a zip file which contains data descriptors and an attacker can
+    //  control files that were compressed to the zip file the returned data is not trusted and
+    //  partly attacker controllable. Everything returned by this function should be regarded untrusted
+    //  (file name, content, file count, ...). Take care handling the output.
+    //
+    //  To be on the safe side use `.unwrap_or_error(...)` on the `MaybeUntrusted` parameter.
+    fn visit_additional_metadata(
+        &mut self,
+        metadata: MaybeUntrusted<&ZipStreamFileMetadata>,
+    ) -> ZipResult<()>;
 }
 
 /// Additional metadata for the file.
@@ -208,13 +278,13 @@ mod test {
 
     struct DummyVisitor;
     impl ZipStreamVisitor for DummyVisitor {
-        fn visit_file(&mut self, _file: &mut ZipFile<'_>) -> ZipResult<()> {
+        fn visit_file(&mut self, _file: MaybeUntrusted<&mut ZipFile<'_>>) -> ZipResult<()> {
             Ok(())
         }
 
         fn visit_additional_metadata(
             &mut self,
-            _metadata: &ZipStreamFileMetadata,
+            _metadata: MaybeUntrusted<&ZipStreamFileMetadata>,
         ) -> ZipResult<()> {
             Ok(())
         }
@@ -223,14 +293,14 @@ mod test {
     #[derive(Default, Debug, Eq, PartialEq)]
     struct CounterVisitor(u64, u64);
     impl ZipStreamVisitor for CounterVisitor {
-        fn visit_file(&mut self, _file: &mut ZipFile<'_>) -> ZipResult<()> {
+        fn visit_file(&mut self, _file: MaybeUntrusted<&mut ZipFile<'_>>) -> ZipResult<()> {
             self.0 += 1;
             Ok(())
         }
 
         fn visit_additional_metadata(
             &mut self,
-            _metadata: &ZipStreamFileMetadata,
+            _metadata: MaybeUntrusted<&ZipStreamFileMetadata>,
         ) -> ZipResult<()> {
             self.1 += 1;
             Ok(())
@@ -266,7 +336,8 @@ mod test {
             filenames: BTreeSet<Box<str>>,
         }
         impl ZipStreamVisitor for V {
-            fn visit_file(&mut self, file: &mut ZipFile<'_>) -> ZipResult<()> {
+            fn visit_file(&mut self, file: MaybeUntrusted<&mut ZipFile<'_>>) -> ZipResult<()> {
+                let file = file.use_untrusted_value();
                 if file.is_file() {
                     self.filenames.insert(file.name().into());
                 }
@@ -275,8 +346,9 @@ mod test {
             }
             fn visit_additional_metadata(
                 &mut self,
-                metadata: &ZipStreamFileMetadata,
+                metadata: MaybeUntrusted<&ZipStreamFileMetadata>,
             ) -> ZipResult<()> {
+                let metadata = metadata.use_untrusted_value();
                 if metadata.is_file() {
                     assert!(
                         self.filenames.contains(metadata.name()),
@@ -303,7 +375,8 @@ mod test {
             filenames: BTreeSet<Box<str>>,
         }
         impl ZipStreamVisitor for V {
-            fn visit_file(&mut self, file: &mut ZipFile<'_>) -> ZipResult<()> {
+            fn visit_file(&mut self, file: MaybeUntrusted<&mut ZipFile<'_>>) -> ZipResult<()> {
+                let file = file.use_untrusted_value();
                 let full_name = file.enclosed_name().unwrap();
                 let file_name = full_name.file_name().unwrap().to_str().unwrap();
                 assert!(
@@ -319,8 +392,9 @@ mod test {
             }
             fn visit_additional_metadata(
                 &mut self,
-                metadata: &ZipStreamFileMetadata,
+                metadata: MaybeUntrusted<&ZipStreamFileMetadata>,
             ) -> ZipResult<()> {
+                let metadata = metadata.use_untrusted_value();
                 if metadata.is_file() {
                     assert!(
                         self.filenames.contains(metadata.name()),

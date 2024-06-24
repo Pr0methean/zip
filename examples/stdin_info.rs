@@ -10,7 +10,15 @@ fn real_main() -> i32 {
     let mut buf = [0u8; 16];
 
     loop {
-        match zip::read::read_zipfile_from_stream(&mut stdin_handle) {
+        let file = match zip::read::read_zipfile_from_stream(&mut stdin_handle) {
+            Err(e) => {
+                println!("Error encountered while reading zip: {e:?}");
+                return 1;
+            }
+            Ok(value) => value,
+        };
+
+        match file.unwrap_or_error("data descriptors not supported while reading stdin") {
             Ok(Some(mut file)) => {
                 println!(
                     "{}: {} bytes ({} bytes packed)",

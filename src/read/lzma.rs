@@ -28,6 +28,10 @@ impl<R: Read> LzmaDecoder<R> {
         copy(&mut self.compressed_reader, &mut self.stream)?;
         self.stream.finish().map_err(Error::from)
     }
+
+    pub fn get_ref(&self) -> &R {
+        &self.compressed_reader
+    }
 }
 
 impl<R: Read> Read for LzmaDecoder<R> {

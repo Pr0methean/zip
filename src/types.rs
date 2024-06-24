@@ -478,6 +478,13 @@ pub struct ZipFileData {
     pub extra_fields: Vec<ExtraField>,
 }
 
+// contains the block and the following fields as read from the file
+pub(crate) struct ZipLocalEntryBlockAndFields {
+    pub(crate) block: ZipLocalEntryBlock,
+    pub(crate) file_name_raw: Vec<u8>,
+    pub(crate) extra_field: Vec<u8>,
+}
+
 impl ZipFileData {
     /// Get the starting offset of the data of the compressed file
     pub fn data_start(&self) -> u64 {
@@ -659,9 +666,10 @@ impl ZipFileData {
         local_block
     }
 
-    pub(crate) fn from_local_block<R: std::io::Read>(
-        block: ZipLocalEntryBlock,
-        reader: &mut R,
+    pub(crate) fn from_local_block(
+        block: ZipLocalEntryBlockAndFields,
+        data_descriptor: Option<ZipDataDescriptor>,
+        allow_empty_data_descriptor: bool,
     ) -> ZipResult<Self> {
         let ZipLocalEntryBlock {
             // magic,
@@ -670,13 +678,11 @@ impl ZipFileData {
             compression_method,
             last_mod_time,
             last_mod_date,
-            crc32,
-            compressed_size,
-            uncompressed_size,
-            file_name_length,
-            extra_field_length,
+            mut crc32,
+            mut compressed_size,
+            mut uncompressed_size,
             ..
-        } = block;
+        } = block.block;
 
         let encrypted: bool = flags & 1 == 1;
         if encrypted {
@@ -689,25 +695,29 @@ impl ZipFileData {
         /* flags & (1 << 3) != 0 */
         let using_data_descriptor: bool = flags & (1 << 3) == 1 << 3;
         if using_data_descriptor {
-            return Err(ZipError::UnsupportedArchive(
-                "The file length is not available in the local header",
-            ));
+            match data_descriptor {
+                None => {
+                    if !allow_empty_data_descriptor {
+                        return Err(ZipError::UnsupportedArchive(
+                            "The file uses a data descriptor, but the provided input stream is not seekable or the data descriptor is missing.",
+                        ));
+                    }
+                }
+                Some(data_descriptor) => {
+                    uncompressed_size = data_descriptor.uncompressed_size;
+                    compressed_size = data_descriptor.compressed_size;
+                    crc32 = data_descriptor.crc32;
+                }
+            }
         }
 
         /* flags & (1 << 1) != 0 */
         let is_utf8: bool = flags & (1 << 11) != 0;
         let compression_method = crate::CompressionMethod::parse_from_u16(compression_method);
-        let file_name_length: usize = file_name_length.into();
-        let extra_field_length: usize = extra_field_length.into();
-
-        let mut file_name_raw = vec![0u8; file_name_length];
-        reader.read_exact(&mut file_name_raw)?;
-        let mut extra_field = vec![0u8; extra_field_length];
-        reader.read_exact(&mut extra_field)?;
 
         let file_name: Box<str> = match is_utf8 {
-            true => String::from_utf8_lossy(&file_name_raw).into(),
-            false => file_name_raw.clone().from_cp437().into(),
+            true => String::from_utf8_lossy(&block.file_name_raw).into(),
+            false => block.file_name_raw.clone().from_cp437().into(),
         };
 
         let system: u8 = (version_made_by >> 8).try_into().unwrap();
@@ -725,8 +735,8 @@ impl ZipFileData {
             compressed_size: compressed_size.into(),
             uncompressed_size: uncompressed_size.into(),
             file_name,
-            file_name_raw: file_name_raw.into(),
-            extra_field: Some(Arc::new(extra_field)),
+            file_name_raw: block.file_name_raw.into(),
+            extra_field: Some(Arc::new(block.extra_field)),
             central_extra_field: None,
             file_comment: String::with_capacity(0).into_boxed_str(), // file comment is only available in the central directory
             // header_start and data start are not available, but also don't matter, since seeking is
@@ -982,6 +992,33 @@ impl FixedSizeBlock for ZipLocalEntryBlock {
         (uncompressed_size, u32),
         (file_name_length, u16),
         (extra_field_length, u16),
+    ];
+}
+
+#[derive(Copy, Clone, Debug)]
+#[repr(packed)]
+pub(crate) struct ZipDataDescriptor {
+    magic: spec::Magic,
+    pub crc32: u32,
+    pub compressed_size: u32,
+    pub uncompressed_size: u32,
+}
+
+impl FixedSizeBlock for crate::types::ZipDataDescriptor {
+    const MAGIC: spec::Magic = spec::Magic::DATA_DESCRIPTOR_SIGNATURE;
+
+    #[inline(always)]
+    fn magic(self) -> spec::Magic {
+        self.magic
+    }
+
+    const WRONG_MAGIC_ERROR: ZipError = ZipError::InvalidArchive("Invalid data descriptor");
+
+    to_and_from_le![
+        (magic, spec::Magic),
+        (crc32, u32),
+        (compressed_size, u32),
+        (uncompressed_size, u32),
     ];
 }
 

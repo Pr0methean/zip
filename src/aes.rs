@@ -220,7 +220,9 @@ impl<R: Read> AesReaderValid<R> {
         self.reader
     }
 
-    pub fn get_ref(&self) -> &R { &self.reader }
+    pub fn get_ref(&self) -> &R {
+        &self.reader
+    }
 }
 
 pub struct AesWriter<W> {

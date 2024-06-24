@@ -1,7 +1,7 @@
+use crate::result::MaybeUntrusted;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use crate::result::{MaybeUntrusted};
 
 use super::{
     central_header_to_zip_file_inner, read_zipfile_from_stream, ZipCentralEntryBlock, ZipError,
@@ -50,7 +50,7 @@ impl<R: Read> ZipStreamReader<R> {
             let file = file.use_untrusted_value();
             match file {
                 Some(mut file) => visitor.visit_file(MaybeUntrusted::wrap(&mut file, untrusted))?,
-                None => break
+                None => break,
             }
         }
 
@@ -82,15 +82,20 @@ impl<R: Read> ZipStreamReader<R> {
     }
 
     fn extract_unsafe<P: AsRef<Path>>(self, directory: P, allow_untrusted: bool) -> ZipResult<()> {
-        struct Extractor<'a> { path: &'a Path, allow_untrusted: bool }
+        struct Extractor<'a> {
+            path: &'a Path,
+            allow_untrusted: bool,
+        }
         impl ZipStreamVisitor for Extractor<'_> {
             fn visit_file(&mut self, file: MaybeUntrusted<&mut ZipFile<'_>>) -> ZipResult<()> {
                 let file = match file {
                     MaybeUntrusted::Ok(file) => file,
-                    MaybeUntrusted::Untrusted(value) => if self.allow_untrusted {
-                        value.use_untrusted_value()
-                    } else {
-                        return Err(ZipError::UnsupportedArchive("extracting a zip file stream-fashion with data descriptors is considered a security risk"));
+                    MaybeUntrusted::Untrusted(value) => {
+                        if self.allow_untrusted {
+                            value.use_untrusted_value()
+                        } else {
+                            return Err(ZipError::UnsupportedArchive("extracting a zip file stream-fashion with data descriptors is considered a security risk"));
+                        }
                     }
                 };
 
@@ -122,10 +127,12 @@ impl<R: Read> ZipStreamReader<R> {
                 {
                     let metadata = match metadata {
                         MaybeUntrusted::Ok(file) => file,
-                        MaybeUntrusted::Untrusted(value) => if self.allow_untrusted {
-                            value.use_untrusted_value()
-                        } else {
-                            return Err(ZipError::UnsupportedArchive("extracting a zip file stream-fashion with data descriptors is considered a security risk"));
+                        MaybeUntrusted::Untrusted(value) => {
+                            if self.allow_untrusted {
+                                value.use_untrusted_value()
+                            } else {
+                                return Err(ZipError::UnsupportedArchive("extracting a zip file stream-fashion with data descriptors is considered a security risk"));
+                            }
                         }
                     };
 
@@ -145,7 +152,10 @@ impl<R: Read> ZipStreamReader<R> {
             }
         }
 
-        self.visit(&mut Extractor {path: directory.as_ref(), allow_untrusted})
+        self.visit(&mut Extractor {
+            path: directory.as_ref(),
+            allow_untrusted,
+        })
     }
 }
 
@@ -175,7 +185,10 @@ pub trait ZipStreamVisitor {
     //  (file name, content, file count, ...). Take care handling the output.
     //
     //  To be on the safe side use `.unwrap_or_error(...)` on the `MaybeUntrusted` parameter.
-    fn visit_additional_metadata(&mut self, metadata: MaybeUntrusted<&ZipStreamFileMetadata>) -> ZipResult<()>;
+    fn visit_additional_metadata(
+        &mut self,
+        metadata: MaybeUntrusted<&ZipStreamFileMetadata>,
+    ) -> ZipResult<()>;
 }
 
 /// Additional metadata for the file.

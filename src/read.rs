@@ -9,13 +9,16 @@ use crate::extra_fields::{ExtendedTimestamp, ExtraField};
 use crate::read::zip_archive::{Shared, SharedBuilder};
 use crate::result::{MaybeUntrusted, UntrustedValue, ZipError, ZipResult};
 use crate::spec::{self, FixedSizeBlock, Zip32CentralDirectoryEnd, ZIP64_ENTRY_THR};
-use crate::types::{AesMode, AesVendorVersion, DateTime, System, ZipCentralEntryBlock, ZipDataDescriptor, ZipFileData, ZipLocalEntryBlock, ZipLocalEntryBlockAndFields};
+use crate::types::{
+    AesMode, AesVendorVersion, DateTime, System, ZipCentralEntryBlock, ZipDataDescriptor,
+    ZipFileData, ZipLocalEntryBlock, ZipLocalEntryBlockAndFields,
+};
 use crate::zipcrypto::{ZipCryptoReader, ZipCryptoReaderValid, ZipCryptoValidator};
 use indexmap::IndexMap;
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fs::create_dir_all;
-use std::io::{self, copy, prelude::*, sink, SeekFrom, ErrorKind};
+use std::io::{self, copy, prelude::*, sink, ErrorKind, SeekFrom};
 use std::marker::PhantomData;
 use std::mem;
 use std::mem::size_of;
@@ -266,7 +269,10 @@ pub(crate) fn find_content<'a, T: Read + Seek>(
     };
 
     reader.seek(io::SeekFrom::Start(data_start))?;
-    Ok(InitiallyKnownCRC32::new(reader.take(data.compressed_size), data.crc32))
+    Ok(InitiallyKnownCRC32::new(
+        reader.take(data.compressed_size),
+        data.crc32,
+    ))
 }
 
 fn find_data_start(
@@ -1138,7 +1144,8 @@ impl<R: Read + Seek> ZipArchive<R> {
             data.crc32,
             data.last_modified_time,
             data.using_data_descriptor,
-            Box::new(InitiallyKnownCRC32::new(limit_reader, data.crc32)) as Box<dyn ReadAndSupplyExpectedCRC32>,
+            Box::new(InitiallyKnownCRC32::new(limit_reader, data.crc32))
+                as Box<dyn ReadAndSupplyExpectedCRC32>,
             password,
             data.aes_mode,
             #[cfg(feature = "aes-crypto")]
@@ -1436,7 +1443,9 @@ pub(crate) fn parse_single_extra_field<R: Read>(
 
 /// Methods for retrieving information on zip files
 impl<'a> ZipFile<'a> {
-    fn get_reader(&mut self) -> ZipResult<&mut ZipFileReader<'a, Box<dyn ReadAndSupplyExpectedCRC32 + 'a>>> {
+    fn get_reader(
+        &mut self,
+    ) -> ZipResult<&mut ZipFileReader<'a, Box<dyn ReadAndSupplyExpectedCRC32 + 'a>>> {
         if let ZipFileReader::NoReader = self.reader {
             let data = &self.data;
             let crypto_reader = self.crypto_reader.take().expect("Invalid reader state");
@@ -1676,7 +1685,7 @@ impl<'a, T: Read> ReadBufferThenForward<'a, T> {
         ReadBufferThenForward {
             reader,
             buffer,
-            index: 0
+            index: 0,
         }
     }
 }
@@ -1690,7 +1699,8 @@ impl<'a, T: Read> Read for ReadBufferThenForward<'a, T> {
         let next_buffer_data = &self.buffer[buffer_start..buffer_end];
         let count_copy_from_buffer = std::cmp::min(next_buffer_data.len(), buf.len());
 
-        buf[0..count_copy_from_buffer].copy_from_slice(&next_buffer_data[0..count_copy_from_buffer]);
+        buf[0..count_copy_from_buffer]
+            .copy_from_slice(&next_buffer_data[0..count_copy_from_buffer]);
 
         self.index += count_copy_from_buffer;
         if self.index > buf.len() && self.index > 0 {
@@ -1701,7 +1711,7 @@ impl<'a, T: Read> Read for ReadBufferThenForward<'a, T> {
         }
 
         let remaining_bytes = buf.len() - count_copy_from_buffer;
-        let result = if remaining_bytes >  0 {
+        let result = if remaining_bytes > 0 {
             self.reader.read(&mut buf[count_copy_from_buffer..])?
         } else {
             0
@@ -1720,7 +1730,7 @@ struct ReadTillDataDescriptor<T: Read> {
 
 impl<T: Read> ReadTillDataDescriptor<T> {
     pub fn new(mut reader: T) -> ZipResult<Self> {
-        let mut look_ahead_buffer= [0u8; std::mem::size_of::<ZipDataDescriptor>()];
+        let mut look_ahead_buffer = [0u8; std::mem::size_of::<ZipDataDescriptor>()];
 
         // fill the look ahead buffer
         reader.read_exact(&mut look_ahead_buffer)?;
@@ -1738,7 +1748,9 @@ impl<T: Read> ReadTillDataDescriptor<T> {
 
 impl<T: Read> ReadTillDataDescriptor<T> {
     fn has_found_data_descriptor(&self) -> Option<ZipDataDescriptor> {
-        if spec::Magic::from_first_le_bytes(&self.look_ahead_buffer) == spec::Magic::DATA_DESCRIPTOR_SIGNATURE {
+        if spec::Magic::from_first_le_bytes(&self.look_ahead_buffer)
+            == spec::Magic::DATA_DESCRIPTOR_SIGNATURE
+        {
             // potentially found a data descriptor
             // check if size matches
             let data_descriptor = match ZipDataDescriptor::interpret(&self.look_ahead_buffer) {
@@ -1785,7 +1797,7 @@ impl<T: Read> Read for ReadTillDataDescriptor<T> {
 
             if let Some(_) = data_descriptor {
                 self.data_descriptor_found = data_descriptor;
-                return Ok(index)
+                return Ok(index);
             }
 
             match self.read_a_byte()? {
@@ -1799,7 +1811,13 @@ impl<T: Read> Read for ReadTillDataDescriptor<T> {
 
 impl<T: Read> ReadAndSupplyExpectedCRC32 for ReadTillDataDescriptor<T> {
     fn get_crc32(&self) -> io::Result<u32> {
-        Ok(self.get_data_descriptor().ok_or(std::io::Error::new(ErrorKind::Other, "EOF reached, corrupt zip file"))?.crc32)
+        Ok(self
+            .get_data_descriptor()
+            .ok_or(std::io::Error::new(
+                ErrorKind::Other,
+                "EOF reached, corrupt zip file",
+            ))?
+            .crc32)
     }
 }
 
@@ -1824,7 +1842,6 @@ fn read_zipfile_from_fileblock<'a, R: Read>(
     data_descriptor: Option<ZipDataDescriptor>,
     mut allow_unlimited_read: bool,
 ) -> ZipResult<MaybeUntrusted<Option<ZipFile<'_>>>> {
-
     if data_descriptor.is_some() && allow_unlimited_read {
         allow_unlimited_read = false; // fallback, size is given
     }
@@ -1833,7 +1850,9 @@ fn read_zipfile_from_fileblock<'a, R: Read>(
     let mut result = ZipFileData::from_local_block(block, data_descriptor, allow_unlimited_read)?;
 
     if size_unknown && !allow_unlimited_read {
-        return Err(ZipError::UnsupportedArchive("Archive is using data descriptors, but unlimited reading not enabled"));
+        return Err(ZipError::UnsupportedArchive(
+            "Archive is using data descriptors, but unlimited reading not enabled",
+        ));
     }
 
     match crate::read::parse_extra_field(&mut result) {
@@ -1844,8 +1863,11 @@ fn read_zipfile_from_fileblock<'a, R: Read>(
     let result_crc32 = result.crc32;
 
     let limit_reader: Box<dyn ReadAndSupplyExpectedCRC32> = match size_unknown {
-        false => Box::new(InitiallyKnownCRC32::new((reader as &'a mut dyn Read).take(result.compressed_size), result_crc32)),
-        true => Box::new(ReadTillDataDescriptor::new(reader)?)
+        false => Box::new(InitiallyKnownCRC32::new(
+            (reader as &'a mut dyn Read).take(result.compressed_size),
+            result_crc32,
+        )),
+        true => Box::new(ReadTillDataDescriptor::new(reader)?),
     };
 
     let result_compression_method = result.compression_method;
@@ -1861,11 +1883,14 @@ fn read_zipfile_from_fileblock<'a, R: Read>(
         result.compressed_size, // does not matter since aes_info is set to None
     )?;
 
-    Ok(MaybeUntrusted::wrap(Some(ZipFile {
-        data: Cow::Owned(result),
-        crypto_reader: None,
-        reader: crate::read::make_reader(result_compression_method, crypto_reader)?,
-    }), size_unknown))
+    Ok(MaybeUntrusted::wrap(
+        Some(ZipFile {
+            data: Cow::Owned(result),
+            crypto_reader: None,
+            reader: crate::read::make_reader(result_compression_method, crypto_reader)?,
+        }),
+        size_unknown,
+    ))
 }
 
 /// Read ZipFile structures from a non-seekable reader.
@@ -1887,7 +1912,9 @@ fn read_zipfile_from_fileblock<'a, R: Read>(
 /// * `comment`: set to an empty string
 /// * `data_start`: set to 0
 /// * `external_attributes`: `unix_mode()`: will return None
-pub fn read_zipfile_from_stream<R: Read>(reader: &mut R) -> ZipResult<MaybeUntrusted<Option<ZipFile>>> {
+pub fn read_zipfile_from_stream<R: Read>(
+    reader: &mut R,
+) -> ZipResult<MaybeUntrusted<Option<ZipFile>>> {
     let block = read_local_fileblock(reader)?;
     let block = match block {
         Some(block) => block,
@@ -1935,12 +1962,13 @@ pub fn advance_stream_to_next_zipfile_start<T: Read>(
             continue;
         }
 
-        if magic == spec::Magic::LOCAL_FILE_HEADER_SIGNATURE
-        {
+        if magic == spec::Magic::LOCAL_FILE_HEADER_SIGNATURE {
             // found a potential magic number
 
             let buffer = magic.to_le_bytes();
-            return Ok(Some(ReadBufferThenForward::new(reader, buffer.into()).into()))
+            return Ok(Some(
+                ReadBufferThenForward::new(reader, buffer.into()).into(),
+            ));
         }
     }
 }
@@ -2003,7 +2031,12 @@ mod test {
         v.extend_from_slice(include_bytes!("../tests/data/mimetype.zip"));
         let mut reader = Cursor::new(v);
         loop {
-            if read_zipfile_from_stream(&mut reader).unwrap().unwrap_or_error("data descriptors used").unwrap().is_none() {
+            if read_zipfile_from_stream(&mut reader)
+                .unwrap()
+                .unwrap_or_error("data descriptors used")
+                .unwrap()
+                .is_none()
+            {
                 break;
             }
         }

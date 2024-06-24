@@ -1,15 +1,15 @@
 //! Helper module to compute a CRC32 checksum
 
-use std::io;
-use std::io::BufReader;
-use std::io::prelude::*;
 use bzip2::read::BzDecoder;
+use std::io;
+use std::io::prelude::*;
+use std::io::BufReader;
 
+use crate::read::lzma::LzmaDecoder;
+use crate::read::CryptoReader;
 use crc32fast::Hasher;
 use deflate64::Deflate64Decoder;
 use flate2::read::DeflateDecoder;
-use crate::read::CryptoReader;
-use crate::read::lzma::LzmaDecoder;
 
 /// Reader that validates the CRC32 when it reaches the EOF.
 pub struct Crc32Reader<R: ReadAndSupplyExpectedCRC32> {
@@ -58,7 +58,7 @@ impl<R: ReadAndSupplyExpectedCRC32> Read for Crc32Reader<R> {
 /// In the normal case, the expected crc is known before the zip entry is read.
 /// In streaming mode with data descriptors, the crc will be available after the data is read.
 /// Still in both cases the crc is available after the data is read and can be checked.
-pub trait ReadAndSupplyExpectedCRC32 : Read {
+pub trait ReadAndSupplyExpectedCRC32: Read {
     fn get_crc32(&self) -> std::io::Result<u32>;
 }
 
@@ -119,13 +119,17 @@ impl<T: ReadAndSupplyExpectedCRC32> ReadAndSupplyExpectedCRC32 for BzDecoder<T> 
     }
 }
 
-impl<'a, T: ReadAndSupplyExpectedCRC32 + BufRead> ReadAndSupplyExpectedCRC32 for zstd::Decoder<'a, T> {
+impl<'a, T: ReadAndSupplyExpectedCRC32 + BufRead> ReadAndSupplyExpectedCRC32
+    for zstd::Decoder<'a, T>
+{
     fn get_crc32(&self) -> io::Result<u32> {
         self.get_ref().get_crc32()
     }
 }
 
-impl<'a, T: ReadAndSupplyExpectedCRC32> ReadAndSupplyExpectedCRC32 for zstd::Decoder<'a, BufReader<T>> {
+impl<'a, T: ReadAndSupplyExpectedCRC32> ReadAndSupplyExpectedCRC32
+    for zstd::Decoder<'a, BufReader<T>>
+{
     fn get_crc32(&self) -> io::Result<u32> {
         self.get_ref().get_ref().get_crc32()
     }

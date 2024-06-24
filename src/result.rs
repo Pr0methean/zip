@@ -118,7 +118,7 @@ impl<T> UntrustedValue<T> {
 
     /// Wraps the provided value as UntrustedValue
     pub fn wrap(value: T) -> Self {
-        UntrustedValue {value}
+        UntrustedValue { value }
     }
 }
 

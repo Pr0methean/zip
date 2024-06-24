@@ -208,7 +208,9 @@ impl<R: std::io::Read> ZipCryptoReaderValid<R> {
         self.reader.file
     }
 
-    pub fn get_ref(&self) -> &R { &self.reader.file }
+    pub fn get_ref(&self) -> &R {
+        &self.reader.file
+    }
 }
 
 static CRCTABLE: [u32; 256] = [

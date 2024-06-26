@@ -908,7 +908,7 @@ impl<R: Read + Seek> ZipArchive<R> {
             }
             let symlink_target = if file.is_symlink() && (cfg!(unix) || cfg!(windows)) {
                 let mut target = Vec::with_capacity(file.size() as usize);
-                file.read_exact(&mut target)?;
+                file.read_to_end(&mut target)?;
                 Some(target)
             } else {
                 None
@@ -922,8 +922,7 @@ impl<R: Read + Seek> ZipArchive<R> {
                 {
                     use std::os::unix::ffi::OsStringExt;
                     let target = OsString::from_vec(target);
-                    let target_path = directory.as_ref().join(target);
-                    std::os::unix::fs::symlink(target_path, outpath.as_path())?;
+                    std::os::unix::fs::symlink(&target, outpath.as_path())?;
                 }
                 #[cfg(windows)]
                 {

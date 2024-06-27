@@ -220,6 +220,7 @@ mod test {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Default, Debug, Eq, PartialEq)]
     struct CounterVisitor(u64, u64);
     impl ZipStreamVisitor for CounterVisitor {
